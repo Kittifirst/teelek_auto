@@ -64,8 +64,8 @@
 
         // Motor 4 Parameters
         #define MOTOR4_PWM  -1
-        #define MOTOR4_IN_A 16
-        #define MOTOR4_IN_B 15
+        #define MOTOR4_IN_A 15
+        #define MOTOR4_IN_B 16
 
          // Encoder Rack Left
         #define CLK_L 20

@@ -21,11 +21,9 @@
 #include <motor.h>
 #include <PIDF.h>
 #include <Utilize.h>
-// #include <Encoder.h>
 
-#include <esp32_Encoder.h>     //Encoder 4 wheels
+#include <esp32_Encoder.h> 
 // #include <ESP32Servo.h>
-#include <esp32_hardware.h>
 
 #define RCCHECK(fn)                  \
     {                                \
