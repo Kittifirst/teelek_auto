@@ -14,6 +14,7 @@
 #include <rosidl_runtime_c/primitives_sequence_functions.h>
 #include <std_msgs/msg/bool.h>
 #include <std_msgs/msg/string.h>
+#include <std_msgs/msg/float32.h>
 #include <geometry_msgs/msg/twist.h>
 #include <std_msgs/msg/float32_multi_array.h>
 
@@ -68,23 +69,11 @@
     rcl_subscription_t cmd_resetencoder_subscriber;
     geometry_msgs__msg__Twist cmd_resetencoder_msg;
 #elif teelek_katsu
-    rcl_subscription_t cmd_loadleft_subscriber;
-    geometry_msgs__msg__Twist cmd_loadleft_msg;
+    rcl_publisher_t debug_plant_publisher;
+    std_msgs__msg__Bool plant_msg;
 
-    rcl_publisher_t debug_loadleft_publisher;
-    geometry_msgs__msg__Twist debug_loadleft_msg;
-
-    rcl_subscription_t cmd_loadright_subscriber;
-    geometry_msgs__msg__Twist cmd_loadright_msg;
-
-    rcl_publisher_t debug_loadright_publisher;
-    geometry_msgs__msg__Twist debug_loadright_msg;
-
-    rcl_subscription_t cmd_servo_subscriber;
-    geometry_msgs__msg__Twist cmd_servo_msg;
-
-    rcl_publisher_t debug_servo_publisher;
-    geometry_msgs__msg__Twist debug_servo_msg;
+    rcl_subscription_t cmd_plant_subscriber;   
+    std_msgs__msg__Bool cmd_plant_msg;         
 #endif
 
 rclc_executor_t executor;
@@ -108,6 +97,12 @@ long lastRB = 0;
 long offsetLF = 0, offsetLB = 0, offsetRF = 0, offsetRB = 0;
 long totalLF = 0, totalLB = 0, totalRF = 0, totalRB = 0; // ✅ tick สะสม
 
+// ถ้าเป็นมอเตอร์ 1.8°/step = 200 step/รอบ
+const int stepsPerRevolution = 6400;
+float max_val = 1023.0;
+float min_val = -max_val;
+bool plant_success_sent = false; 
+
 enum states
 {
     WAITING_AGENT,
@@ -128,13 +123,11 @@ enum states
     esp32_Encoder encRF(Encoder_RF_A, Encoder_RF_B, COUNTS_PER_REV, ENCODER_INV_RF, GEAR_RATIO, WHEEL_DIAMETER);
     esp32_Encoder encRB(Encoder_RB_A, Encoder_RB_B, COUNTS_PER_REV, ENCODER_INV_RB, GEAR_RATIO, WHEEL_DIAMETER);
 #elif teelek_katsu
-    Controller motorloadleft(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTORLOAD_INV, MOTORLOAD_BRAKE, MOTORLOAD_LEFT_PWM, MOTORLOAD_LEFT_IN_A, MOTORLOAD_LEFT_IN_B);
-    Controller motorloadright(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTORLOAD_INV, MOTORLOAD_BRAKE, MOTORLOAD_RIGHT_PWM, MOTORLOAD_RIGHT_IN_A, MOTORLOAD_RIGHT_IN_B);
-    Servo servo_dig;
-    bool servo_attached = false;
-    float servo_pulse = -1;
-    unsigned long servo_detach_time = 0;
-    bool servo_detach_pending = false;
+    // Plant Zone
+    Controller motor(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR_INV, MOTOR_BRAKE, MOTOR_PWM, MOTOR_IN_A, MOTOR_IN_B);
+    esp32_Encoder encoder(MOTOR_ENCODER_PIN_A, MOTOR_ENCODER_PIN_B,
+					  ENCODER_PULSES_PER_REVOLUTION, MOTOR_ENCODER_INV, MOTOR_ENCODER_RATIO, WHEEL_DIAMETER);
+    Servo servo;   
 #endif
 
 //------------------------------ < Fuction Prototype > ------------------------------//
@@ -145,20 +138,19 @@ bool destroyEntities();
 struct timespec getTime();
 
 void cmd_vel_callback(const void *);
-void cmd_loadleft_callback(const void *);
-void cmd_loadright_callback(const void *);
 void cmd_reset_encoder_callback(const void *msgin);
-
-void loadleft(int MotorloadSpeed);
-void loadright(int MotorloadSpeed);
-void controlServo(float pulse);
-void cmd_servo_callback(const void *msgin);
 
 void publishData();
 void getEncoderWheelsTick(); 
 void MovePower(int, int, int, int);
-void leftload(int);
-void rightload(int);
+
+void rotateAngle(float angle, bool direction);
+bool moveLeadToPositionMM(float target_mm, int speed = 800, bool reset_encoder = false);
+void plant_cabbage();
+bool isLimitHit();
+
+bool plant_running = false;
+
 //------------------------------ < Main > -------------------------------------//
 
 #ifdef teelek_karake
@@ -246,11 +238,17 @@ void rightload(int);
     }
 #elif teelek_katsu
     void setup() {
-        // servo_dig.setPeriodHertz(50);`
-        servo_dig.attach(SERVO_PIN, SERVO_MIN_PULSE, SERVO_MAX_PULSE);
-        servo_dig.writeMicroseconds(800);
-
         Serial.begin(115200);
+
+        pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);  // ปกติ HIGH, ชน = LOW
+
+        servo.attach(SERVO_PIN, SERVO_MIN_PULSE_WIDTH, SERVO_MAX_PULSE_WIDTH);
+        pinMode(DIR, OUTPUT);
+        pinMode(PUL, OUTPUT);
+        pinMode(ENA, OUTPUT);
+
+        digitalWrite(ENA, LOW);
+
         #ifdef MICROROS_WIFI
             IPAddress agent_ip(AGENT_IP);
             uint16_t agent_port = AGENT_PORT;
@@ -417,6 +415,7 @@ void rightload(int);
         debug_encoder_wheels_msg.data.data[2] = 0;
         debug_encoder_wheels_msg.data.data[3] = 0;
     }
+
     void cmd_reset_encoder_callback(const void *msgin)
     {
         const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
@@ -433,71 +432,314 @@ void rightload(int);
         if (timer != NULL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
         {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
             publishData(); 
-            if (servo_detach_pending) {
-                if (millis() - servo_detach_time >= 5000) {
-                    servo_dig.detach();
-                    servo_attached = false;
-                    servo_detach_pending = false;
-                } else if (servo_attached) {
-                    // ระหว่างรอ 5 วิ ให้ส่ง PWM เดิมไว้ก่อน
-                    servo_dig.writeMicroseconds(servo_pulse);
-                }
-            } else if (servo_attached) {
-                // refresh PWM ป้องกัน servo ย้วย
-                servo_dig.writeMicroseconds(servo_pulse);
+            if(plant_running){
+                plant_cabbage();
             }
+        }
+    }   
+
+    void rotateAngle(float angle, bool direction) {
+
+        int steps = round((stepsPerRevolution * angle) / 360.0);
+
+        digitalWrite(DIR, direction);
+        delay(5);   // ให้ DIR เซ็ตตัวก่อน
+
+        for (int i = 0; i < steps; i++) {
+            digitalWrite(PUL, HIGH);
+            delayMicroseconds(1500);
+            digitalWrite(PUL, LOW);
+            delayMicroseconds(1500);
         }
     }
 
-    void loadleft(int MotorloadSpeed) {
-        MotorloadSpeed = constrain(MotorloadSpeed, PWM_Min, PWM_Max);
-        motorloadleft.spin(MotorloadSpeed);
-    }
+    bool moveLeadToPositionMM(float target_mm, int speed, bool reset_encoder) {
+        // --- Conversion factor ---
+        const float counts_per_mm =
+            (ENCODER_COUNTS_PER_REV * MOTOR_ENCODER_RATIO * LEAD_SCREW_GEAR_RATIO) / LEAD_SCREW_PITCH_MM_PER_REV;
 
-    void loadright(int MotorloadSpeed) {
-        MotorloadSpeed = constrain(MotorloadSpeed, PWM_Min, PWM_Max);
-        motorloadright.spin(MotorloadSpeed);
-    }
+        // --- Clamp target to safe range (optional) ---
+        // const float MIN_MM = 0.0;
+        // const float MAX_MM = 300.0;
+        // target_mm = constrain(target_mm, MIN_MM, MAX_MM);
 
-    void controlServo(float pulse) {
-        servo_pulse = pulse;
+        // --- Convert target mm → encoder counts ---
+        long target_counts = target_mm * counts_per_mm;
 
-        if (pulse <= 800) {
-            // สั่ง 800 → เริ่มนับเวลา 5 วินาทีก่อน detach
-            if (servo_attached && !servo_detach_pending) {
-                servo_detach_time = millis();
-                servo_detach_pending = true;
-            }
+        // --- Read current position ---
+        long current_counts = encoder.read();
+
+        // --- Error ---
+        long error_counts = target_counts - current_counts;
+        float error_mm = error_counts / counts_per_mm;
+        Serial.println("Target mm: " + String(target_mm) + ", Current mm: " + String(current_counts / counts_per_mm) + ", Error mm: " + String(error_mm));
+
+        // --- Stop condition ---
+        const float error_tolerance_mm = 0.10;   // ตั้ง tolerance
+
+        if (error_mm > 0 && isLimitHit() && reset_encoder) {
+        motor.spin(0);
+        encoder.reset();
+        return true;
+        }
+
+        if (abs(error_mm) <= error_tolerance_mm) {
+            motor.spin(0);
+            return true;
+        }
+
+        if (error_mm > 0) {
+            // move forward
+            motor.spin(speed);
         } else {
-            // ถ้ามีการสั่งค่า > 800 → ยกเลิกการ detach ที่รอไว้
-            servo_detach_pending = false;
-
-            // Attach servo ถ้ายังไม่ได้ต่อ
-            if (!servo_attached) servo_dig.attach(SERVO_PIN);
-            servo_attached = true;
-
-            // ส่ง PWM ให้ servo ทำงาน
-            servo_dig.writeMicroseconds(pulse);
+            // move backward
+            motor.spin(-speed);
         }
+        delay(10);
+        return false;
+    }
+
+    void plant_cabbage() {
+
+    static int state = 0;
+    static unsigned long waitTime = 0;
+    static int loopCount = 0;
+
+    switch(state) {
+
+        // =========================
+        // move 1000 (reset encoder)
+        // =========================
+        case 0:
+            if(moveLeadToPositionMM(1000.0f, 900, true)){
+                servo.writeMicroseconds(1235);
+                state = 1;
+            }
+            break;
+
+            // =========================
+            // rotate 30°
+            // =========================
+            case 1:
+                rotateAngle(30, true);
+                waitTime = millis();
+                state = 2;
+                break;
+
+            case 2:
+                if(millis() - waitTime >= 1000){
+                    servo.writeMicroseconds(1235);
+                    encoder.reset();
+                    state = 3;
+                }
+                break;
+
+            // =========================
+            // -195
+            // =========================
+            case 3:
+                if(moveLeadToPositionMM(-195.0f)){
+                    encoder.reset();
+                    state = 4;
+                }
+                break;
+
+            // =========================
+            // 12.5
+            // =========================
+            case 4:
+                if(moveLeadToPositionMM(12.5f)){
+                    state = 5;
+                }
+                break;
+
+            // =========================
+            // 50 (servo 900 while moving)
+            // =========================
+            case 5:
+                if(!moveLeadToPositionMM(50.0f)){
+                    servo.writeMicroseconds(900);
+                } else {
+                    waitTime = millis();
+                    state = 6;
+                }
+                break;
+
+            case 6:
+                if(millis() - waitTime >= 750){
+                    servo.writeMicroseconds(1280);
+                    waitTime = millis();
+                    state = 7;
+                }
+                break;
+
+            case 7:
+                if(millis() - waitTime >= 1000){
+                    state = 8;
+                }
+                break;
+
+            // =========================
+            // กลับ 0
+            // =========================
+            case 8:
+                if(moveLeadToPositionMM(0.0f, 1023)){
+                    loopCount = 0;
+                    state = 9;
+                }
+                break;
+
+            // =========================
+            // LOOP 4 รอบ
+            // =========================
+            case 9:
+                if(loopCount < 4){
+                    state = 10;
+                } else {
+                    state = 15;
+                }
+                break;
+
+            case 10:
+                if(moveLeadToPositionMM(5.0f)){
+                    state = 11;
+                }
+                break;
+
+            case 11:
+                if(!moveLeadToPositionMM(25.0f, 1023)){
+                    servo.writeMicroseconds(900);
+                } else {
+                    servo.writeMicroseconds(1280);
+                    waitTime = millis();
+                    state = 12;
+                }
+                break;
+
+            case 12:
+                if(millis() - waitTime >= 500){
+                    state = 13;
+                }
+                break;
+
+            case 13:
+                if(moveLeadToPositionMM(0.0f, 1023)){
+                    waitTime = millis();
+                    state = 14;
+                }
+                break;
+
+            case 14:
+                if(millis() - waitTime >= 500){
+                    loopCount++;
+                    state = 9;
+                }
+                break;
+
+            // =========================
+            // รอบสุดท้าย
+            // =========================
+            case 15:
+                if(moveLeadToPositionMM(5.0f)){
+                    state = 16;
+                }
+                break;
+
+            case 16:
+                if(!moveLeadToPositionMM(25.0f, 650)){
+                    servo.writeMicroseconds(900);
+                } else {
+                    state = 17;
+                }
+                break;
+
+            case 17:
+                if(moveLeadToPositionMM(0.0f)){
+                    servo.writeMicroseconds(1050);
+                    waitTime = millis();
+                    state = 18;
+                }
+                break;
+
+            case 18:
+                if(millis() - waitTime >= 800){
+                    servo.writeMicroseconds(750);
+                    waitTime = millis();
+                    state = 19;
+                }
+                break;
+
+            case 19:
+                if(millis() - waitTime >= 500){
+                    servo.writeMicroseconds(1100);
+                    waitTime = millis();
+                    state = 20;
+                }
+                break;
+
+            case 20:
+                if(millis() - waitTime >= 800){
+                    servo.writeMicroseconds(750);
+                    waitTime = millis();
+                    state = 21;
+                }
+                break;
+
+            case 21:
+                if(millis() - waitTime >= 500){
+                    state = 22;
+                }
+                break;
+
+            // =========================
+            // 60
+            // =========================
+            case 22:
+                if(moveLeadToPositionMM(60.0f, 1023)){
+                    servo.writeMicroseconds(1225);
+                    state = 23;
+                }
+                break;
+
+            // =========================
+            // 195 (reset true)
+            // =========================
+            case 23:
+                if(moveLeadToPositionMM(195.0f, 900, true)){
+                    state = 24;
+                }
+                break;
+
+            // =========================
+            // FINISH
+            // =========================
+            case 24:
+                plant_running = false;
+                plant_msg.data = false;
+                rcl_publish(&debug_plant_publisher, &plant_msg, NULL);
+                state = 0;
+                break;
+        }
+    }
+
+    bool isLimitHit() {
+        return digitalRead(LIMIT_SWITCH_PIN) == LOW;
     }
 
     // -------------------- Callbacks --------------------
-    void cmd_loadleft_callback(const void *msgin) {
-        const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        cmd_loadleft_msg = *msg;
-        loadleft(msg->linear.x);
-    }
+    void cmd_plant_callback(const void *msgin)
+    {
+        const std_msgs__msg__Bool * msg = (const std_msgs__msg__Bool *)msgin;
 
-    void cmd_loadright_callback(const void *msgin) {
-        const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        cmd_loadright_msg = *msg;
-        loadright(msg->linear.x);
-    }
+        if(msg->data == true && !plant_running){
 
-    void cmd_servo_callback(const void *msgin) {
-        const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        cmd_servo_msg = *msg;
-        controlServo(msg->angular.x);
+            plant_running = true;
+            plant_success_sent = false;
+            encoder.reset();
+
+            plant_msg.data = true;
+            rcl_publish(&debug_plant_publisher, &plant_msg, NULL);
+        }
     }
 #endif
 
@@ -543,22 +785,12 @@ bool createEntities()
 
     #elif teelek_katsu
         if (rclc_publisher_init_default(
-                &debug_loadleft_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/debug/loadleft") != RCL_RET_OK) return false;
+            &debug_plant_publisher,
+            &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+            "teelek/plant_status") != RCL_RET_OK) return false;
 
-        if (rclc_publisher_init_default(
-                &debug_loadright_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/debug/loadright") != RCL_RET_OK) return false;
-
-        if (rclc_publisher_init_default(
-                &debug_servo_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/debug/servo") != RCL_RET_OK) return false;
+        std_msgs__msg__Bool__init(&plant_msg);
     #endif
 
     // -------------------- Subscriptions --------------------
@@ -584,35 +816,21 @@ bool createEntities()
 
     #elif teelek_katsu
         if (rclc_subscription_init_default(
-                &cmd_loadleft_subscriber,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/cmd_loadleft") != RCL_RET_OK) return false;
-        
-        if (rclc_subscription_init_default(
-                &cmd_loadright_subscriber,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/cmd_loadright") != RCL_RET_OK) return false;
+            &cmd_plant_subscriber,
+            &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+            "teelek/plant_cmd") != RCL_RET_OK) return false;
 
-        if (rclc_subscription_init_default(
-                &cmd_servo_subscriber,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/cmd_servo") != RCL_RET_OK) return false;
-
-        if (rclc_executor_add_subscription(&executor, &cmd_loadleft_subscriber, &cmd_loadleft_msg,
-            &cmd_loadleft_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
-        
-        if (rclc_executor_add_subscription(&executor, &cmd_loadright_subscriber, &cmd_loadright_msg,
-            &cmd_loadright_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
-
-        if (rclc_executor_add_subscription(&executor, &cmd_servo_subscriber, &cmd_servo_msg,
-            &cmd_servo_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
+        if (rclc_executor_add_subscription(
+            &executor,
+            &cmd_plant_subscriber,
+            &cmd_plant_msg,
+            &cmd_plant_callback,
+            ON_NEW_DATA) != RCL_RET_OK) return false;
     #endif
 
     // -------------------- Timer --------------------
-    const unsigned int control_timeout = 50;
+    const unsigned int control_timeout = 10;
     if (rclc_timer_init_default(&control_timer, &support,
         RCL_MS_TO_NS(control_timeout), &controlCallback) != RCL_RET_OK) return false;
 
@@ -635,12 +853,8 @@ bool destroyEntities()
         rcl_publisher_fini(&debug_cmd_vel_publisher, &node);
         rcl_publisher_fini(&debug_encoder_wheels_publisher, &node);
     #elif teelek_katsu
-        rcl_subscription_fini(&cmd_servo_subscriber, &node);
-        rcl_subscription_fini(&cmd_loadleft_subscriber, &node);
-        rcl_subscription_fini(&cmd_loadright_subscriber, &node);
-        rcl_publisher_fini(&debug_loadleft_publisher, &node);
-        rcl_publisher_fini(&debug_loadright_publisher, &node);
-        rcl_publisher_fini(&debug_servo_publisher, &node);
+        rcl_subscription_fini(&cmd_plant_subscriber, &node);
+        rcl_publisher_fini(&debug_plant_publisher, &node);
     #endif
 
     rcl_timer_fini(&control_timer);
@@ -661,13 +875,9 @@ void publishData()
         rcl_publish(&debug_cmd_vel_publisher, &debug_wheel_motor_msg, NULL);
         rcl_publish(&debug_encoder_wheels_publisher, &debug_encoder_wheels_msg, NULL);
     #elif teelek_katsu
-        debug_loadleft_msg.linear.x = cmd_loadleft_msg.linear.x;
-        debug_loadright_msg.linear.x = cmd_loadright_msg.linear.x;
-        debug_servo_msg.angular.x = cmd_servo_msg.angular.x;
+        // debug_servo_msg.angular.x = cmd_servo_msg.angular.x;
 
-        rcl_publish(&debug_loadleft_publisher, &debug_loadleft_msg, NULL);
-        rcl_publish(&debug_loadright_publisher, &debug_loadright_msg, NULL);
-        rcl_publish(&debug_servo_publisher, &debug_servo_msg, NULL);
+        // rcl_publish(&debug_servo_publisher, &debug_servo_msg, NULL);
     #endif
 }
 

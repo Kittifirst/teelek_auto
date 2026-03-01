@@ -23,7 +23,6 @@
 #include <Utilize.h>
 
 #include <esp32_Encoder.h> 
-// #include <ESP32Servo.h>
 
 #define RCCHECK(fn)                  \
     {                                \
@@ -63,32 +62,13 @@
     geometry_msgs__msg__Twist debug_wheel_motor_msg;
     geometry_msgs__msg__Twist cmd_vel_msg;
 
-    rcl_publisher_t debug_encoder_publisher;
-    geometry_msgs__msg__Twist debug_encoder_msg;
-
     rcl_publisher_t debug_encoder_wheels_publisher;
     std_msgs__msg__Float32MultiArray debug_encoder_wheels_msg;
 
     rcl_subscription_t cmd_resetencoder_subscriber;
     geometry_msgs__msg__Twist cmd_resetencoder_msg;
 #elif teelek_katsu
-    rcl_subscription_t cmd_loadleft_subscriber;
-    geometry_msgs__msg__Twist cmd_loadleft_msg;
-
-    rcl_publisher_t debug_loadleft_publisher;
-    geometry_msgs__msg__Twist debug_loadleft_msg;
-
-    rcl_subscription_t cmd_loadright_subscriber;
-    geometry_msgs__msg__Twist cmd_loadright_msg;
-
-    rcl_publisher_t debug_loadright_publisher;
-    geometry_msgs__msg__Twist debug_loadright_msg;
-
-    rcl_subscription_t cmd_servo_subscriber;
-    geometry_msgs__msg__Twist cmd_servo_msg;
-
-    rcl_publisher_t debug_servo_publisher;
-    geometry_msgs__msg__Twist debug_servo_msg;
+ 
 #endif
 
 rclc_executor_t executor;
@@ -102,11 +82,6 @@ unsigned long long time_offset = 0;
 unsigned long prev_cmd_time = 0;
 static unsigned long last_sync = 0;
 
-// Encoder rack
-float rack_tick = 0;
-long last_L_tick = 0;
-long last_R_tick = 0;
-
 // Encoder wheels
 float wheel_ticks[4] = {0};   // LF, LB, RF, RB
 long lastLF = 0;
@@ -117,6 +92,16 @@ long lastRB = 0;
 long offsetLF = 0, offsetLB = 0, offsetRF = 0, offsetRB = 0;
 long totalLF = 0, totalLB = 0, totalRF = 0, totalRB = 0; // ✅ tick สะสม
 
+// PIDF(Kp, Ki, Kd, Kf, dt, i_min, i_max, min_val, max_val)
+
+PIDF pidLF(2.0, 0.1, 0.01, 0, 0.05, -500, 500, -1023, 1023);
+PIDF pidRF(2.0, 0.1, 0.01, 0, 0.05, -500, 500, -1023, 1023);
+PIDF pidLB(2.0, 0.1, 0.01, 0, 0.05, -500, 500, -1023, 1023);
+PIDF pidRB(2.0, 0.1, 0.01, 0, 0.05, -500, 500, -1023, 1023);
+
+float targetSpeedLF = 0, targetSpeedRF = 0, targetSpeedLB = 0, targetSpeedRB = 0;
+long prevLF = 0, prevLB = 0, prevRF = 0, prevRB = 0;
+
 enum states
 {
     WAITING_AGENT,
@@ -126,10 +111,10 @@ enum states
 } state;
 
 #ifdef teelek_karake
-    Controller motor1(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR1_INV, MOTOR1_BRAKE, MOTOR1_PWM, MOTOR1_IN_A, MOTOR1_IN_B);
-    Controller motor2(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR2_INV, MOTOR2_BRAKE, MOTOR2_PWM, MOTOR2_IN_A, MOTOR2_IN_B);
-    Controller motor3(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR3_INV, MOTOR3_BRAKE, MOTOR3_PWM, MOTOR3_IN_A, MOTOR3_IN_B);
-    Controller motor4(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR4_INV, MOTOR4_BRAKE, MOTOR4_PWM, MOTOR4_IN_A, MOTOR4_IN_B);
+    Controller motor_LF(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR_LF_INV, MOTOR_LF_BRAKE, MOTOR_LF_PWM, MOTOR_LF_IN_A, MOTOR_LF_IN_B);
+    Controller motor_RF(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR_RF_INV, MOTOR_RF_BRAKE, MOTOR_RF_PWM, MOTOR_RF_IN_A, MOTOR_RF_IN_B);
+    Controller motor_LB(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR_LB_INV, MOTOR_LB_BRAKE, MOTOR_LB_PWM, MOTOR_LB_IN_A, MOTOR_LB_IN_B);
+    Controller motor_RB(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTOR_RB_INV, MOTOR_RB_BRAKE, MOTOR_RB_PWM, MOTOR_RB_IN_A, MOTOR_RB_IN_B);
 
     // Encoder 4 wheels
     esp32_Encoder encLF(Encoder_LF_A, Encoder_LF_B, COUNTS_PER_REV, ENCODER_INV_LF, GEAR_RATIO, WHEEL_DIAMETER);
@@ -137,13 +122,7 @@ enum states
     esp32_Encoder encRF(Encoder_RF_A, Encoder_RF_B, COUNTS_PER_REV, ENCODER_INV_RF, GEAR_RATIO, WHEEL_DIAMETER);
     esp32_Encoder encRB(Encoder_RB_A, Encoder_RB_B, COUNTS_PER_REV, ENCODER_INV_RB, GEAR_RATIO, WHEEL_DIAMETER);
 #elif teelek_katsu
-    Controller motorloadleft(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTORLOAD_INV, MOTORLOAD_BRAKE, MOTORLOAD_LEFT_PWM, MOTORLOAD_LEFT_IN_A, MOTORLOAD_LEFT_IN_B);
-    Controller motorloadright(Controller::Drive2pin, PWM_FREQUENCY, PWM_BITS, MOTORLOAD_INV, MOTORLOAD_BRAKE, MOTORLOAD_RIGHT_PWM, MOTORLOAD_RIGHT_IN_A, MOTORLOAD_RIGHT_IN_B);
-    Servo servo_dig;
-    bool servo_attached = false;
-    float servo_pulse = -1;
-    unsigned long servo_detach_time = 0;
-    bool servo_detach_pending = false;
+    
 #endif
 
 //------------------------------ < Fuction Prototype > ------------------------------//
@@ -154,23 +133,12 @@ bool destroyEntities();
 struct timespec getTime();
 
 void cmd_vel_callback(const void *);
-void cmd_loadleft_callback(const void *);
-void cmd_loadright_callback(const void *);
 void cmd_reset_encoder_callback(const void *msgin);
-
-void loadleft(int MotorloadSpeed);
-void loadright(int MotorloadSpeed);
-void controlServo(float pulse);
-void cmd_loadleft_callback(const void *msgin);
-void cmd_loadright_callback(const void *msgin);
-void cmd_servo_callback(const void *msgin);
 
 void publishData();
 void getEncoderWheelsTick(); 
-void getEncoderData();
 void MovePower(int, int, int, int);
-void leftload(int);
-void rightload(int);
+
 //------------------------------ < Main > -------------------------------------//
 
 #ifdef teelek_karake
@@ -258,10 +226,6 @@ void rightload(int);
     }
 #elif teelek_katsu
     void setup() {
-        // servo_dig.setPeriodHertz(50);`
-        servo_dig.attach(SERVO_PIN, SERVO_MIN_PULSE, SERVO_MAX_PULSE);
-        servo_dig.writeMicroseconds(800);
-
         Serial.begin(115200);
         #ifdef MICROROS_WIFI
             IPAddress agent_ip(AGENT_IP);
@@ -367,17 +331,17 @@ void rightload(int);
 
 #ifdef teelek_karake
     // Motor Move
-    void MovePower(int Motor1Speed, int Motor2Speed, int Motor3Speed, int Motor4Speed)
+    void MovePower(int Motor_LFSpeed, int Motor_RFSpeed, int Motor_LBSpeed, int Motor_RBSpeed)
     {
-        Motor1Speed = constrain(Motor1Speed, PWM_Min, PWM_Max);
-        Motor2Speed = constrain(Motor2Speed, PWM_Min, PWM_Max);
-        Motor3Speed = constrain(Motor3Speed, PWM_Min, PWM_Max);
-        Motor4Speed = constrain(Motor4Speed, PWM_Min, PWM_Max);
+        Motor_LFSpeed = constrain(Motor_LFSpeed, PWM_Min, PWM_Max);
+        Motor_RFSpeed = constrain(Motor_RFSpeed, PWM_Min, PWM_Max);
+        Motor_LBSpeed = constrain(Motor_LBSpeed, PWM_Min, PWM_Max);
+        Motor_RBSpeed = constrain(Motor_RBSpeed, PWM_Min, PWM_Max);
 
-        motor1.spin(Motor1Speed);
-        motor2.spin(Motor2Speed);
-        motor3.spin(Motor3Speed);
-        motor4.spin(Motor4Speed);
+        motor_LF.spin(Motor_LFSpeed);
+        motor_RF.spin(Motor_RFSpeed);
+        motor_LB.spin(Motor_LBSpeed);
+        motor_RB.spin(Motor_RBSpeed);
     }
 
     void cmd_vel_callback(const void *msgin) 
@@ -391,7 +355,7 @@ void rightload(int);
         int bl = (V_x - W_z)/d * (float) PWM_Max;
         int br = (V_x + W_z)/d * (float) PWM_Max;
         MovePower(fl, fr,
-                bl, br);
+                  bl, br);
     }
 
     void controlCallback(rcl_timer_t *timer, int64_t last_call_time)
@@ -399,45 +363,9 @@ void rightload(int);
         RCLC_UNUSED(last_call_time);
         if (timer != NULL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
         {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-            getEncoderData();
             getEncoderWheelsTick();
             publishData(); 
         }
-    }
-
-    void getEncoderData()
-    {
-        // อ่านค่าจาก encoder ซ้ายและขวา
-        long curL = readEncoderL();
-        long curR = -readEncoderR();
-
-        // คำนวณ ticks ที่เปลี่ยนไป
-        long diff_L_ticks = curL - last_L_tick;
-        long diff_R_ticks = curR - last_R_tick;
-
-        // อัปเดตค่าเก็บ tick ล่าสุด
-        last_L_tick = curL;
-        last_R_tick = curR;
-
-        // ---------------- Logic เลือกฝั่งที่เชื่อถือได้ ----------------
-        if (abs(diff_L_ticks) > 3 && abs(diff_L_ticks) >= abs(diff_R_ticks)) {
-            // ถ้าฝั่งซ้ายมีการเปลี่ยนแปลงชัดเจน → ใช้ซ้ายเป็นตัวแทน
-            diff_R_ticks = diff_L_ticks;
-            curR = curL;
-        } 
-        else if (abs(diff_R_ticks) > 3 && abs(diff_R_ticks) > abs(diff_L_ticks)) {
-            // ถ้าฝั่งขวามีการเปลี่ยนแปลงชัดเจน → ใช้ขวาเป็นตัวแทน
-            diff_L_ticks = diff_R_ticks;
-            curL = curR;
-        }
-
-        // ใช้ diff_L_ticks เป็น rack_tick เพราะ synced แล้ว
-        rack_tick = diff_L_ticks;   
-
-        // ส่งค่าออก ROS debug
-        debug_encoder_msg.linear.x = curL;      
-        debug_encoder_msg.linear.y = curR;      
-        debug_encoder_msg.linear.z = rack_tick; 
     }
 
     void getEncoderWheelsTick() {
@@ -481,72 +409,40 @@ void rightload(int);
         if (timer != NULL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
         {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
             publishData(); 
-            if (servo_detach_pending) {
-                if (millis() - servo_detach_time >= 5000) {
-                    servo_dig.detach();
-                    servo_attached = false;
-                    servo_detach_pending = false;
-                } else if (servo_attached) {
-                    // ระหว่างรอ 5 วิ ให้ส่ง PWM เดิมไว้ก่อน
-                    servo_dig.writeMicroseconds(servo_pulse);
-                }
-            } else if (servo_attached) {
-                // refresh PWM ป้องกัน servo ย้วย
-                servo_dig.writeMicroseconds(servo_pulse);
-            }
-        }
-    }
-
-    void loadleft(int MotorloadSpeed) {
-        MotorloadSpeed = constrain(MotorloadSpeed, PWM_Min, PWM_Max);
-        motorloadleft.spin(MotorloadSpeed);
-    }
-
-    void loadright(int MotorloadSpeed) {
-        MotorloadSpeed = constrain(MotorloadSpeed, PWM_Min, PWM_Max);
-        motorloadright.spin(MotorloadSpeed);
-    }
-
-    void controlServo(float pulse) {
-        servo_pulse = pulse;
-
-        if (pulse <= 800) {
-            // สั่ง 800 → เริ่มนับเวลา 5 วินาทีก่อน detach
-            if (servo_attached && !servo_detach_pending) {
-                servo_detach_time = millis();
-                servo_detach_pending = true;
-            }
-        } else {
-            // ถ้ามีการสั่งค่า > 800 → ยกเลิกการ detach ที่รอไว้
-            servo_detach_pending = false;
-
-            // Attach servo ถ้ายังไม่ได้ต่อ
-            if (!servo_attached) servo_dig.attach(SERVO_PIN);
-            servo_attached = true;
-
-            // ส่ง PWM ให้ servo ทำงาน
-            servo_dig.writeMicroseconds(pulse);
+            // if (servo_detach_pending) {
+            //     if (millis() - servo_detach_time >= 5000) {
+            //         servo_dig.detach();
+            //         servo_attached = false;
+            //         servo_detach_pending = false;
+            //     } else if (servo_attached) {
+            //         // ระหว่างรอ 5 วิ ให้ส่ง PWM เดิมไว้ก่อน
+            //         servo_dig.writeMicroseconds(servo_pulse);
+            //     }
+            // } else if (servo_attached) {
+            //     // refresh PWM ป้องกัน servo ย้วย
+            //     servo_dig.writeMicroseconds(servo_pulse);
+            // }
         }
     }
 
     // -------------------- Callbacks --------------------
-    void cmd_loadleft_callback(const void *msgin) {
-        const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        cmd_loadleft_msg = *msg;
-        loadleft(msg->linear.x);
-    }
+    // void cmd_loadleft_callback(const void *msgin) {
+    //     const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
+    //     cmd_loadleft_msg = *msg;
+    //     loadleft(msg->linear.x);
+    // }
 
-    void cmd_loadright_callback(const void *msgin) {
-        const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        cmd_loadright_msg = *msg;
-        loadright(msg->linear.x);
-    }
+    // void cmd_loadright_callback(const void *msgin) {
+    //     const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
+    //     cmd_loadright_msg = *msg;
+    //     loadright(msg->linear.x);
+    // }
 
-    void cmd_servo_callback(const void *msgin) {
-        const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        cmd_servo_msg = *msg;
-        controlServo(msg->angular.x);
-    }
+    // void cmd_servo_callback(const void *msgin) {
+    //     const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
+    //     cmd_servo_msg = *msg;
+    //     controlServo(msg->angular.x);
+    // }
 #endif
 
 bool createEntities()
@@ -581,12 +477,6 @@ bool createEntities()
                 "debug/wheel/cmd_vel") != RCL_RET_OK) return false;
 
         if (rclc_publisher_init_default(
-                &debug_encoder_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "teelek/debug/encoder") != RCL_RET_OK) return false;
-
-        if (rclc_publisher_init_default(
                 &debug_encoder_wheels_publisher,
                 &node,
                 ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
@@ -596,23 +486,11 @@ bool createEntities()
         rosidl_runtime_c__float__Sequence__init(&debug_encoder_wheels_msg.data, 4);
 
     #elif teelek_katsu
-        if (rclc_publisher_init_default(
-                &debug_loadleft_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/debug/loadleft") != RCL_RET_OK) return false;
-
-        if (rclc_publisher_init_default(
-                &debug_loadright_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/debug/loadright") != RCL_RET_OK) return false;
-
-        if (rclc_publisher_init_default(
-                &debug_servo_publisher,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/debug/servo") != RCL_RET_OK) return false;
+        // if (rclc_publisher_init_default(
+        //         &debug_servo_publisher,
+        //         &node,
+        //         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+        //         "/teelek/debug/servo") != RCL_RET_OK) return false;
     #endif
 
     // -------------------- Subscriptions --------------------
@@ -637,32 +515,14 @@ bool createEntities()
             &cmd_reset_encoder_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
 
     #elif teelek_katsu
-        if (rclc_subscription_init_default(
-                &cmd_loadleft_subscriber,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/cmd_loadleft") != RCL_RET_OK) return false;
-        
-        if (rclc_subscription_init_default(
-                &cmd_loadright_subscriber,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/cmd_loadright") != RCL_RET_OK) return false;
+        // if (rclc_subscription_init_default(
+        //         &cmd_servo_subscriber,
+        //         &node,
+        //         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+        //         "/teelek/cmd_servo") != RCL_RET_OK) return false;
 
-        if (rclc_subscription_init_default(
-                &cmd_servo_subscriber,
-                &node,
-                ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-                "/teelek/cmd_servo") != RCL_RET_OK) return false;
-
-        if (rclc_executor_add_subscription(&executor, &cmd_loadleft_subscriber, &cmd_loadleft_msg,
-            &cmd_loadleft_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
-        
-        if (rclc_executor_add_subscription(&executor, &cmd_loadright_subscriber, &cmd_loadright_msg,
-            &cmd_loadright_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
-
-        if (rclc_executor_add_subscription(&executor, &cmd_servo_subscriber, &cmd_servo_msg,
-            &cmd_servo_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
+        // if (rclc_executor_add_subscription(&executor, &cmd_servo_subscriber, &cmd_servo_msg,
+        //     &cmd_servo_callback, ON_NEW_DATA) != RCL_RET_OK) return false;
     #endif
 
     // -------------------- Timer --------------------
@@ -687,15 +547,10 @@ bool destroyEntities()
         rcl_subscription_fini(&cmd_vel_subscriber, &node);
         rcl_subscription_fini(&cmd_resetencoder_subscriber, &node);
         rcl_publisher_fini(&debug_cmd_vel_publisher, &node);
-        rcl_publisher_fini(&debug_encoder_publisher, &node);
         rcl_publisher_fini(&debug_encoder_wheels_publisher, &node);
     #elif teelek_katsu
-        rcl_subscription_fini(&cmd_servo_subscriber, &node);
-        rcl_subscription_fini(&cmd_loadleft_subscriber, &node);
-        rcl_subscription_fini(&cmd_loadright_subscriber, &node);
-        rcl_publisher_fini(&debug_loadleft_publisher, &node);
-        rcl_publisher_fini(&debug_loadright_publisher, &node);
-        rcl_publisher_fini(&debug_servo_publisher, &node);
+        // rcl_subscription_fini(&cmd_servo_subscriber, &node);
+        // rcl_publisher_fini(&debug_servo_publisher, &node);
     #endif
 
     rcl_timer_fini(&control_timer);
@@ -714,16 +569,11 @@ void publishData()
         debug_wheel_motor_msg.angular.z = cmd_vel_msg.angular.z;
 
         rcl_publish(&debug_cmd_vel_publisher, &debug_wheel_motor_msg, NULL);
-        rcl_publish(&debug_encoder_publisher, &debug_encoder_msg, NULL);
         rcl_publish(&debug_encoder_wheels_publisher, &debug_encoder_wheels_msg, NULL);
     #elif teelek_katsu
-        debug_loadleft_msg.linear.x = cmd_loadleft_msg.linear.x;
-        debug_loadright_msg.linear.x = cmd_loadright_msg.linear.x;
-        debug_servo_msg.angular.x = cmd_servo_msg.angular.x;
+        // debug_servo_msg.angular.x = cmd_servo_msg.angular.x;
 
-        rcl_publish(&debug_loadleft_publisher, &debug_loadleft_msg, NULL);
-        rcl_publish(&debug_loadright_publisher, &debug_loadright_msg, NULL);
-        rcl_publish(&debug_servo_publisher, &debug_servo_msg, NULL);
+        // rcl_publish(&debug_servo_publisher, &debug_servo_msg, NULL);
     #endif
 }
 
