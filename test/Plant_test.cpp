@@ -99,6 +99,7 @@ bool moveLeadToPositionMM(float target_mm, int speed = 800, bool reset_encoder =
         // move backward
         motor.spin(-speed);
     }
+    Serial.println(error_mm);
     delay(10);
     return false;
 }

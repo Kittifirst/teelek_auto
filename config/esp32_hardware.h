@@ -43,63 +43,47 @@
 
         // Motor 3 Parameters
         #define MOTOR_LB_PWM  -1
-        #define MOTOR_LB_IN_A 15
-        #define MOTOR_LB_IN_B 16
+        #define MOTOR_LB_IN_A 1
+        #define MOTOR_LB_IN_B 2
 
         // Motor 4 Parameters
         #define MOTOR_RB_PWM  -1
-        #define MOTOR_RB_IN_A 1
-        #define MOTOR_RB_IN_B 2
+        #define MOTOR_RB_IN_A 15
+        #define MOTOR_RB_IN_B 16
         
         // ---------------- Encoder 4 wheels ----------------
 
         // Motor 1
-        #define Encoder_LF_A 39
-        #define Encoder_LF_B 40
+        #define Encoder_LF_A 42
+        #define Encoder_LF_B 41
 
         // Motor 2
         #define Encoder_RF_A 13
         #define Encoder_RF_B 14
         
         // Motor 3
-        #define Encoder_LB_A 41
-        #define Encoder_LB_B 42
+        #define Encoder_LB_A 40
+        #define Encoder_LB_B 39
 
         // Motor 4
-        #define Encoder_RB_A 37
-        #define Encoder_RB_B 38
+        #define Encoder_RB_A 38
+        #define Encoder_RB_B 37
 
         #define ENCODER_TICKS 11
         #define GEAR_RATIO 534.0168 
         #define COUNTS_PER_REV ENCODER_TICKS * GEAR_RATIO * 4       // encoder resolution
-        #define ENCODER_INV_LF false
+        #define ENCODER_INV_LF true
         #define ENCODER_INV_RF false
         #define ENCODER_INV_LB true
         #define ENCODER_INV_RB false
     #endif
 
     #ifdef teelek_katsu
-
-        // Motor loadleft config
-        #define MOTORLOAD_LEFT_PWM  -1
-        #define MOTORLOAD_LEFT_IN_A  15
-        #define MOTORLOAD_LEFT_IN_B  16
-
-        // Motor loadleft config
-        #define MOTORLOAD_RIGHT_PWM  -1
-        #define MOTORLOAD_RIGHT_IN_A  17
-        #define MOTORLOAD_RIGHT_IN_B  18
-
-        // Servo Parameter
-        #define SERVO_PIN 39
-        #define SERVO_MIN_PULSE 800 
-        #define SERVO_MAX_PULSE 3200
-
         //Load Zone
         //Stepmotor
-        #define ENA 13
-        #define DIR 12
-        #define PUL 11
+        #define ENA 7
+        #define DIR 15
+        #define PUL 16
 
         //Plant Zone
         //define your robot' specs here
@@ -127,26 +111,26 @@
         #define MOTOR_INV false
 
         // INVERT ENCODER DIRECTIONS
-        #define MOTOR_ENCODER_INV true
+        #define MOTOR_ENCODER_INV false
 
         //  Motor Brake
         #define MOTOR_BRAKE true
 
         // Motor 1 Parameters
         #define MOTOR_PWM  -1
-        #define MOTOR_IN_A 38
-        #define MOTOR_IN_B 37
+        #define MOTOR_IN_A 41
+        #define MOTOR_IN_B 40
 
         // Encoder 1 Parameter
         #define MOTOR_ENCODER_INCRIMENT -1
-        #define MOTOR_ENCODER_PIN_A 36
-        #define MOTOR_ENCODER_PIN_B 35
+        #define MOTOR_ENCODER_PIN_A 39
+        #define MOTOR_ENCODER_PIN_B 38
         #define MOTOR_ENCODER_GEAR 22.0f
         #define MOTOR_ENCODER_PULLEY 41.0f
         #define MOTOR_ENCODER_RATIO (MOTOR_ENCODER_PULLEY / MOTOR_ENCODER_GEAR)
 
         // Servo Parameters
-        #define SERVO_PIN 39
+        #define SERVO_PIN 35
         #define SERVO_MIN_PULSE_WIDTH 500
         #define SERVO_MAX_PULSE_WIDTH 2500
 
@@ -157,20 +141,24 @@
         #define LEAD_SCREW_GEAR_RATIO (LEAD_SCREW_PULLEY_GEAR / LEAD_SCREW_MOTOR_GEAR)
 
         // I2C communication
-        #define SCL_PIN 22
-        #define SDA_PIN 21
+        #define SCL_PIN 9
+        #define SDA_PIN 8
 
         // Limit SW
-        #define LIMIT_SWITCH_PIN 15 
+        #define LIMIT_SWITCH_PIN 4
+
+        // Ultrasonic
+        #define TRIG 48
+        #define ECHO 47
 
     #endif
 
-    // INVERT ENCODER DIRECTIONS (ใช้เฉพาะ 2 ข้าง)
-    #define MOTOR_LF_ENCODER_INV false
-    #define MOTOR_RF_ENCODER_INV false
+    // // INVERT ENCODER DIRECTIONS (ใช้เฉพาะ 2 ข้าง)
+    // #define MOTOR_LF_ENCODER_INV false
+    // #define MOTOR_RF_ENCODER_INV false
 
-    // I2C communication
-    #define SCL_PIN 8
-    #define SDA_PIN 9
+    // // I2C communication
+    // #define SCL_PIN 9
+    // #define SDA_PIN 8
 
 #endif
