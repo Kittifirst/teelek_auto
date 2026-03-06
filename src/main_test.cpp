@@ -22,6 +22,7 @@
 #include <motor.h>
 #include <PIDF.h>
 #include <Utilize.h>
+#include <imu_bno055.h>
 
 #include <esp32_Encoder.h> 
 
@@ -68,6 +69,10 @@
 
     rcl_subscription_t cmd_resetencoder_subscriber;
     geometry_msgs__msg__Twist cmd_resetencoder_msg;
+    
+    // IMU
+    rcl_publisher_t imu_publisher;
+    sensor_msgs__msg__Imu imu_msg;
 #elif teelek_katsu
     rcl_publisher_t debug_plant_publisher;
     std_msgs__msg__Bool plant_msg;
@@ -102,6 +107,9 @@ const int stepsPerRevolution = 6400;
 float max_val = 1023.0;
 float min_val = -max_val;
 bool plant_success_sent = false; 
+
+// IMU
+bool imu_initialized = false;
 
 enum states
 {
@@ -151,6 +159,7 @@ bool isLimitHit();
 
 bool plant_running = false;
 
+IMU_BNO055 bno055;
 //------------------------------ < Main > -------------------------------------//
 
 #ifdef teelek_karake
@@ -205,6 +214,30 @@ bool plant_running = false;
         interrupts();
         return v;
     }
+
+    // IMU Data
+    void imu_data(){
+        bno055.getIMUData(imu_msg);
+
+        struct timespec time_stamp = getTime();
+        imu_msg.header.stamp.sec = time_stamp.tv_sec;
+        imu_msg.header.stamp.nanosec = time_stamp.tv_nsec;
+        imu_msg.header.frame_id.data = "imu_link";
+
+        imu_msg.angular_velocity_covariance[0] = 0.0001;
+        imu_msg.angular_velocity_covariance[4] = 0.0001;
+        imu_msg.angular_velocity_covariance[8] = 0.0001;
+
+        imu_msg.linear_acceleration_covariance[0] = 0.04;
+        imu_msg.linear_acceleration_covariance[4] = 0.04;
+        imu_msg.linear_acceleration_covariance[8] = 0.04;
+
+        imu_msg.orientation_covariance[0] = 0.0025;
+        imu_msg.orientation_covariance[4] = 0.0025;
+        imu_msg.orientation_covariance[8] = 0.0025;
+        rcl_publish(&imu_publisher, &imu_msg, NULL);
+    }
+
 #elif teelek_katsu
 #endif
 
@@ -234,6 +267,7 @@ bool plant_running = false;
             set_microros_wifi_transports((char*)SSID, (char*)SSID_PW, agent_ip, agent_port);
         #else
             set_microros_serial_transports(Serial);
+            imu_initialized = bno055.init();
         #endif
     }
 #elif teelek_katsu
@@ -369,13 +403,19 @@ bool plant_running = false;
     void cmd_vel_callback(const void *msgin) 
     {
         const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-        float V_x = msg->linear.x;
-        float W_z = msg->angular.z;
-        float d = max(abs(V_x) + abs(W_z), (float) PWM_Max);
-        int fl = (V_x - W_z)/d * (float) PWM_Max;
-        int fr = (V_x + W_z)/d * (float) PWM_Max;
-        int bl = (V_x - W_z)/d * (float) PWM_Max;
-        int br = (V_x + W_z)/d * (float) PWM_Max;
+        // float V_x = msg->linear.x;
+        // float W_z = msg->angular.z;
+        // float d = max(abs(V_x) + abs(W_z), (float) PWM_Max);
+        // int fl = (V_x - W_z)/d * (float) PWM_Max;
+        // int fr = (V_x + W_z)/d * (float) PWM_Max;
+        // int bl = (V_x - W_z)/d * (float) PWM_Max;
+        // int br = (V_x + W_z)/d * (float) PWM_Max;
+
+        int fl = msg->linear.x;
+        int fr = msg->linear.y;
+        int bl = msg->linear.z;
+        int br = msg->angular.x;
+
         MovePower(fl, fr,
                   bl, br);
     }
@@ -383,10 +423,23 @@ bool plant_running = false;
     void controlCallback(rcl_timer_t *timer, int64_t last_call_time)
     {
         RCLC_UNUSED(last_call_time);
-        if (timer != NULL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
-        {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-getEncoderWheelsTick();
-            publishData(); 
+
+        if (timer != NULL)
+        {
+            getEncoderWheelsTick();
+            publishData();
+
+            if (!imu_initialized)
+            {
+                imu_initialized = bno055.init();
+                if (!imu_initialized)
+                {
+                    Serial.println("IMU initialization failed");
+                    return;
+                }
+            }
+
+            imu_data();
         }
     }
 
@@ -397,8 +450,8 @@ getEncoderWheelsTick();
         long curRB = encRB.read();
 
         debug_encoder_wheels_msg.data.data[0] = curLF - offsetLF;
-        debug_encoder_wheels_msg.data.data[1] = curLB - offsetLB;
-        debug_encoder_wheels_msg.data.data[2] = curRF - offsetRF;
+        debug_encoder_wheels_msg.data.data[1] = curRF - offsetRF;
+        debug_encoder_wheels_msg.data.data[2] = curLB - offsetLB;
         debug_encoder_wheels_msg.data.data[3] = curRB - offsetRB;
     }
 
@@ -436,8 +489,8 @@ getEncoderWheelsTick();
                 plant_cabbage();
             }
         }
-    }   
-
+    }
+    
     void rotateAngle(float angle, bool direction) {
 
         int steps = round((stepsPerRevolution * angle) / 360.0);
@@ -779,6 +832,12 @@ bool createEntities()
                 &node,
                 ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
                 "teelek/debug/encoder_wheels") != RCL_RET_OK) return false;
+
+        if (rclc_publisher_init_default(
+                &imu_publisher,
+                &node,
+                ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+                "teelek/imu/data"));
 
         // init float sequence 4 elements
         rosidl_runtime_c__float__Sequence__init(&debug_encoder_wheels_msg.data, 4);

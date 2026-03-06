@@ -157,8 +157,8 @@
     // #define MOTOR_LF_ENCODER_INV false
     // #define MOTOR_RF_ENCODER_INV false
 
-    // // I2C communication
-    // #define SCL_PIN 9
-    // #define SDA_PIN 8
+    // I2C communication
+    #define SCL_PIN 9
+    #define SDA_PIN 8
 
 #endif

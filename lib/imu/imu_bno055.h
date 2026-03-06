@@ -5,6 +5,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <sensor_msgs/msg/imu.h>
+#include <config.h>
 
 // Define the IMU class
 class IMU_BNO055 {
