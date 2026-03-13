@@ -78,7 +78,10 @@
     std_msgs__msg__Bool plant_msg;
 
     rcl_subscription_t cmd_plant_subscriber;   
-    std_msgs__msg__Bool cmd_plant_msg;         
+    std_msgs__msg__Bool cmd_plant_msg;
+    
+    rcl_publisher_t ultra_pub;
+    std_msgs__msg__Float32 ultra_msg;
 #endif
 
 rclc_executor_t executor;
@@ -158,6 +161,7 @@ void plant_cabbage();
 bool isLimitHit();
 
 bool plant_running = false;
+float readUltrasonic();
 
 IMU_BNO055 bno055;
 //------------------------------ < Main > -------------------------------------//
@@ -282,6 +286,9 @@ IMU_BNO055 bno055;
         pinMode(ENA, OUTPUT);
 
         digitalWrite(ENA, LOW);
+
+        pinMode(TRIG_PIN, OUTPUT);
+        pinMode(ECHO_PIN, INPUT);
 
         #ifdef MICROROS_WIFI
             IPAddress agent_ip(AGENT_IP);
@@ -482,9 +489,15 @@ IMU_BNO055 bno055;
     void controlCallback(rcl_timer_t *timer, int64_t last_call_time)
     {
         RCLC_UNUSED(last_call_time);
-        if (timer != NULL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
-        {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-            publishData(); 
+
+        if (timer != NULL)
+        {
+            publishData();
+
+            float dist = readUltrasonic();
+            ultra_msg.data = dist;
+            rcl_publish(&ultra_pub, &ultra_msg, NULL);
+
             if(plant_running){
                 plant_cabbage();
             }
@@ -550,6 +563,25 @@ IMU_BNO055 bno055;
         }
         delay(10);
         return false;
+    }
+
+    float readUltrasonic()
+    {
+        long duration;
+
+        digitalWrite(TRIG_PIN, LOW);
+        delayMicroseconds(5);
+
+        digitalWrite(TRIG_PIN, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(TRIG_PIN, LOW);
+
+        duration = pulseIn(ECHO_PIN, HIGH, 30000);
+
+        if(duration == 0)
+            return 999.0;
+
+        return duration * 0.0343 / 2;
     }
 
     void plant_cabbage() {
@@ -850,6 +882,14 @@ bool createEntities()
             "teelek/plant_status") != RCL_RET_OK) return false;
 
         std_msgs__msg__Bool__init(&plant_msg);
+
+        if (rclc_publisher_init_default(
+            &ultra_pub,
+            &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+            "/teelek/ultra_trig") != RCL_RET_OK) return false;
+
+        std_msgs__msg__Float32__init(&ultra_msg);
     #endif
 
     // -------------------- Subscriptions --------------------

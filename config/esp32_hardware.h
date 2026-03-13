@@ -43,13 +43,13 @@
 
         // Motor 3 Parameters
         #define MOTOR_LB_PWM  -1
-        #define MOTOR_LB_IN_A 1
-        #define MOTOR_LB_IN_B 2
+        #define MOTOR_LB_IN_A 15
+        #define MOTOR_LB_IN_B 16
 
         // Motor 4 Parameters
         #define MOTOR_RB_PWM  -1
-        #define MOTOR_RB_IN_A 15
-        #define MOTOR_RB_IN_B 16
+        #define MOTOR_RB_IN_A 1
+        #define MOTOR_RB_IN_B 2
         
         // ---------------- Encoder 4 wheels ----------------
 
@@ -62,20 +62,20 @@
         #define Encoder_RF_B 14
         
         // Motor 3
-        #define Encoder_LB_A 40
-        #define Encoder_LB_B 39
+        #define Encoder_LB_A 38
+        #define Encoder_LB_B 37
 
         // Motor 4
-        #define Encoder_RB_A 38
-        #define Encoder_RB_B 37
+        #define Encoder_RB_A 40
+        #define Encoder_RB_B 39
 
         #define ENCODER_TICKS 11
         #define GEAR_RATIO 534.0168 
         #define COUNTS_PER_REV ENCODER_TICKS * GEAR_RATIO * 4       // encoder resolution
-        #define ENCODER_INV_LF true
-        #define ENCODER_INV_RF false
-        #define ENCODER_INV_LB true
-        #define ENCODER_INV_RB false
+        #define ENCODER_INV_LF false
+        #define ENCODER_INV_RF true
+        #define ENCODER_INV_LB false
+        #define ENCODER_INV_RB true
     #endif
 
     #ifdef teelek_katsu
@@ -148,8 +148,8 @@
         #define LIMIT_SWITCH_PIN 4
 
         // Ultrasonic
-        #define TRIG 48
-        #define ECHO 47
+        #define TRIG_PIN 48
+        #define ECHO_PIN 47
 
     #endif
 
