@@ -571,7 +571,6 @@ IMU_BNO055 bno055;
 
         digitalWrite(TRIG_PIN, LOW);
         delayMicroseconds(5);
-
         digitalWrite(TRIG_PIN, HIGH);
         delayMicroseconds(10);
         digitalWrite(TRIG_PIN, LOW);
